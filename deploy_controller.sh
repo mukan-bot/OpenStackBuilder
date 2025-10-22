@@ -340,6 +340,34 @@ sudo systemctl disable ovn-controller || true
 sudo systemctl disable ovn-northd || true
 sudo apt-get remove -y ovn-central ovn-common ovn-host || true
 
+# Fix MySQL configuration file path issue for Ubuntu 24.04
+log "Fixing MySQL configuration..."
+if [ ! -f "/etc/mysql/my.cnf" ] && [ -f "/etc/mysql/mysql.conf.d/mysqld.cnf" ]; then
+    sudo ln -sf /etc/mysql/mysql.conf.d/mysqld.cnf /etc/mysql/my.cnf
+fi
+
+# Ensure MySQL configuration directory exists
+sudo mkdir -p /etc/mysql/conf.d
+sudo mkdir -p /etc/mysql/mysql.conf.d
+
+# Create my.cnf if it doesn't exist
+if [ ! -f "/etc/mysql/my.cnf" ]; then
+    sudo tee /etc/mysql/my.cnf > /dev/null <<MYCNF
+[mysql]
+
+[mysqld]
+bind-address = 0.0.0.0
+default-storage-engine = innodb
+innodb_file_per_table = on
+max_connections = 256
+collation-server = utf8_general_ci
+character-set-server = utf8
+
+!includedir /etc/mysql/conf.d/
+!includedir /etc/mysql/mysql.conf.d/
+MYCNF
+fi
+
 # Run DevStack
 log "Starting DevStack installation (this will take 15-30 minutes)..."
 if ! ./stack.sh; then

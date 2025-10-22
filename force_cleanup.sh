@@ -59,6 +59,13 @@ log_info "Removing OVN packages..."
 apt-get remove -y ovn-central ovn-common ovn-host ovn-docker 2>/dev/null || true
 apt-get autoremove -y 2>/dev/null || true
 
+# Clean MySQL configuration if it was modified
+log_info "Cleaning MySQL configuration..."
+if [[ -L "/etc/mysql/my.cnf" ]]; then
+    rm -f /etc/mysql/my.cnf
+    log_info "Removed MySQL symlink"
+fi
+
 # Clean up OpenStack Python packages
 log_info "Cleaning up OpenStack Python packages..."
 if [[ -d "/opt/stack/data/venv" ]]; then
