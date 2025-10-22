@@ -275,13 +275,13 @@ cd "\$DEVSTACK_DIR"
 
 # Create compute node local.conf
 log "Creating compute node local.conf..."
-cat > local.conf <<LOCALCONF
+cat > local.conf <<'LOCALCONF'
 [[local|localrc]]
 # Administrative passwords
-ADMIN_PASSWORD=$ADMIN_PASS
-DATABASE_PASSWORD=$ADMIN_PASS
-RABBIT_PASSWORD=$ADMIN_PASS
-SERVICE_PASSWORD=$ADMIN_PASS
+ADMIN_PASSWORD=ADMIN_PASS_PLACEHOLDER
+DATABASE_PASSWORD=ADMIN_PASS_PLACEHOLDER
+RABBIT_PASSWORD=ADMIN_PASS_PLACEHOLDER
+SERVICE_PASSWORD=ADMIN_PASS_PLACEHOLDER
 
 # DevStack directories
 DEST=/opt/stack
@@ -289,8 +289,8 @@ DATA_DIR=\$DEST/data
 SERVICE_DIR=\$DEST/status
 
 # This is a compute node
-HOST_IP=$HOST_IP
-SERVICE_HOST=$CONTROLLER_IP
+HOST_IP=HOST_IP_PLACEHOLDER
+SERVICE_HOST=CONTROLLER_IP_PLACEHOLDER
 MYSQL_HOST=\$SERVICE_HOST
 RABBIT_HOST=\$SERVICE_HOST
 GLANCE_HOSTPORT=\$SERVICE_HOST:9292
@@ -304,7 +304,7 @@ VNCSERVER_LISTEN=\$HOST_IP
 VNCSERVER_PROXYCLIENT_ADDRESS=\$HOST_IP
 
 # Virtualization type
-LIBVIRT_TYPE=$LIBVIRT_TYPE
+LIBVIRT_TYPE=LIBVIRT_TYPE_PLACEHOLDER
 
 # Only enable compute services on this node
 ENABLED_SERVICES=n-cpu,q-agt,placement-client
@@ -340,6 +340,15 @@ LOGFILE=\$DEST/logs/stack.sh.log
 VERBOSE=True
 LOG_COLOR=True
 SCREEN_LOGDIR=\$DEST/logs
+
+# Optional: Configure public interface if specified
+LOCALCONF
+
+# Replace placeholders with actual values
+sed -i "s/ADMIN_PASS_PLACEHOLDER/$ADMIN_PASS/g" local.conf
+sed -i "s/HOST_IP_PLACEHOLDER/$HOST_IP/g" local.conf
+sed -i "s/CONTROLLER_IP_PLACEHOLDER/$CONTROLLER_IP/g" local.conf
+sed -i "s/LIBVIRT_TYPE_PLACEHOLDER/$LIBVIRT_TYPE/g" local.conf
 
 # Optional: Configure public interface if specified
 LOCALCONF

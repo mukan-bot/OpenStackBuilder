@@ -219,17 +219,17 @@ cd "\$DEVSTACK_DIR"
 
 # Create local.conf
 log "Creating local.conf..."
-cat > local.conf <<LOCALCONF
+cat > local.conf <<'LOCALCONF'
 [[local|localrc]]
 # Administrative passwords
-ADMIN_PASSWORD=$ADMIN_PASS
-DATABASE_PASSWORD=$ADMIN_PASS
-RABBIT_PASSWORD=$ADMIN_PASS
-SERVICE_PASSWORD=$ADMIN_PASS
+ADMIN_PASSWORD=ADMIN_PASS_PLACEHOLDER
+DATABASE_PASSWORD=ADMIN_PASS_PLACEHOLDER
+RABBIT_PASSWORD=ADMIN_PASS_PLACEHOLDER
+SERVICE_PASSWORD=ADMIN_PASS_PLACEHOLDER
 
 # Network configuration
-HOST_IP=$HOST_IP
-SERVICE_HOST=$HOST_IP
+HOST_IP=HOST_IP_PLACEHOLDER
+SERVICE_HOST=HOST_IP_PLACEHOLDER
 
 # DevStack directories
 DEST=/opt/stack
@@ -291,6 +291,10 @@ disable_service s-proxy s-object s-container s-account
 # Tempest (optional - disable for faster deployment)
 disable_service tempest
 LOCALCONF
+
+# Replace placeholders with actual values
+sed -i "s/ADMIN_PASS_PLACEHOLDER/$ADMIN_PASS/g" local.conf
+sed -i "s/HOST_IP_PLACEHOLDER/$HOST_IP/g" local.conf
 
 log "Generated local.conf:"
 grep -v "PASSWORD" local.conf
