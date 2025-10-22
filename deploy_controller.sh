@@ -38,14 +38,23 @@ echo "Detected primary interface: $DEFAULT_IF with IP $HOST_IP (gateway $GATEWAY
 # Check if a second interface (for external network) is available
 EXT_IF=""  # will hold an external interface name if found
 # Look for an interface that is UP, not lo or the primary, with no IP address
-for iface in $(ip -o link show | awk -F': ' '{print $2}' | grep -v "$DEFAULT_IF" | grep -v lo); do
-    ip addr show dev "$iface" | grep -q "inet " && continue  # skip if has an IPv4
-    # If we get here, $iface has no IPv4 address
+for iface in $(ip -o link show | awk -F': ' '{print $2}' | grep -v "^$DEFAULT_IF$" | grep -v "^lo$"); do
+    # Check if interface is UP
+    if ! ip link show dev "$iface" | grep -q "state UP"; then
+        continue
+    fi
+    # Check if interface has no IPv4 address
+    if ip addr show dev "$iface" | grep -q "inet "; then
+        continue
+    fi
+    # If we get here, $iface has no IPv4 address and is UP
     EXT_IF="$iface"
     break
 done
 if [[ -n "$EXT_IF" ]]; then
     echo "Detected secondary interface: $EXT_IF (will be used for external network)"
+else
+    echo "No suitable secondary interface found. Using default NAT mode."
 fi
 
 # 2. Create Stack User for DevStack
@@ -80,10 +89,23 @@ echo "Preparing DevStack configuration (local.conf)..."
 sudo -i -u "$STACK_USER" bash <<EOF
 set -e
 
-# Clone the DevStack repository (latest stable branch)
+# Clone or update the DevStack repository (latest stable branch)
 if [ ! -d "~/devstack" ]; then
     echo "Cloning DevStack repository..."
     git clone https://opendev.org/openstack/devstack ~/devstack
+else
+    echo "DevStack repository already exists. Updating..."
+    cd ~/devstack
+    # Backup any existing local.conf
+    if [ -f "local.conf" ]; then
+        cp local.conf local.conf.backup.$(date +%Y%m%d_%H%M%S)
+        echo "Backed up existing local.conf"
+    fi
+    # Clean any uncommitted changes and update
+    git stash push -u -m "Auto-stash before update $(date)"
+    git checkout master || git checkout main || true
+    git pull origin HEAD
+    cd ~/
 fi
 cd ~/devstack
 
@@ -111,33 +133,46 @@ if [[ -n "$EXT_IF" ]]; then
     # We'll allocate a small range at the high end of the subnet for Floating IPs.
     python3 - <<PYCODE
 import ipaddress
-net = ipaddress.ip_network(u"$FLOAT_NET_CIDR", strict=False)
-# Choose last 10 usable addresses as floating pool (or fewer if subnet is small)
-all_hosts = list(net.hosts())
-if len(all_hosts) > 0:
-    start_ip = all_hosts[max(0, len(all_hosts)-10)]
-    end_ip = all_hosts[-1]
-    # Ensure start_ip is not the host IP or gateway
-    reserved = {"$HOST_IP", "$GATEWAY_IP"}
-    # If host or gateway are in the last addresses, adjust range to avoid them
-    res_start = ipaddress.ip_address(min(int(start_ip), int(end_ip)))
-    res_end = ipaddress.ip_address(max(int(start_ip), int(end_ip)))
-    # Remove any reserved from the top range
-    while str(res_end) in reserved and res_end >= net.network_address:
-        res_end = ipaddress.ip_address(int(res_end) - 1)
-    if res_end < net.network_address:
-        # If we somehow ran out of addresses, just use host IP as pool (edge case small subnet)
-        res_start = res_end = ipaddress.ip_address("$HOST_IP")
-    res_start_val = int(res_end) - 9 if int(res_end) - int(net.network_address) >= 9 else net.network_address + 1
-    if res_start_val < int(net.network_address):
-        res_start_val = int(net.network_address) + 1
-    res_start = ipaddress.ip_address(res_start_val)
-    # Avoid reserved at start as well
-    while str(res_start) in reserved and res_start < res_end:
-        res_start = ipaddress.ip_address(int(res_start) + 1)
-    print(f"FLOATING_RANGE={net.network_address}/{net.prefixlen}")
-    print(f"PUBLIC_NETWORK_GATEWAY=$GATEWAY_IP")
-    print(f"Q_FLOATING_ALLOCATION_POOL=start={res_start},end={res_end}")
+import sys
+
+try:
+    net = ipaddress.ip_network(u"$FLOAT_NET_CIDR", strict=False)
+    # Choose last 10 usable addresses as floating pool (or fewer if subnet is small)
+    all_hosts = list(net.hosts())
+    if len(all_hosts) > 0:
+        start_ip = all_hosts[max(0, len(all_hosts)-10)]
+        end_ip = all_hosts[-1]
+        # Ensure start_ip is not the host IP or gateway
+        reserved = {"$HOST_IP", "$GATEWAY_IP"}
+        # If host or gateway are in the last addresses, adjust range to avoid them
+        res_start = ipaddress.ip_address(min(int(start_ip), int(end_ip)))
+        res_end = ipaddress.ip_address(max(int(start_ip), int(end_ip)))
+        # Remove any reserved from the top range
+        while str(res_end) in reserved and res_end >= net.network_address:
+            res_end = ipaddress.ip_address(int(res_end) - 1)
+        if res_end < net.network_address:
+            # If we somehow ran out of addresses, just use host IP as pool (edge case small subnet)
+            res_start = res_end = ipaddress.ip_address("$HOST_IP")
+        res_start_val = int(res_end) - 9 if int(res_end) - int(net.network_address) >= 9 else int(net.network_address) + 1
+        if res_start_val < int(net.network_address):
+            res_start_val = int(net.network_address) + 1
+        res_start = ipaddress.ip_address(res_start_val)
+        # Avoid reserved at start as well
+        while str(res_start) in reserved and res_start < res_end:
+            res_start = ipaddress.ip_address(int(res_start) + 1)
+        print(f"FLOATING_RANGE={net.network_address}/{net.prefixlen}")
+        print(f"PUBLIC_NETWORK_GATEWAY=$GATEWAY_IP")
+        print(f"Q_FLOATING_ALLOCATION_POOL=start={res_start},end={res_end}")
+    else:
+        print("# No usable host addresses in network")
+        print("FLOATING_RANGE=172.24.4.0/24")
+        print("PUBLIC_NETWORK_GATEWAY=172.24.4.1")
+        print("Q_FLOATING_ALLOCATION_POOL=start=172.24.4.225,end=172.24.4.254")
+except Exception as e:
+    print(f"# Error calculating floating range: {e}", file=sys.stderr)
+    print("FLOATING_RANGE=172.24.4.0/24")
+    print("PUBLIC_NETWORK_GATEWAY=172.24.4.1") 
+    print("Q_FLOATING_ALLOCATION_POOL=start=172.24.4.225,end=172.24.4.254")
 PYCODE
     >> local.conf
 else
@@ -161,6 +196,24 @@ cat local.conf
 ##############################
 echo "Running DevStack (this will take ~10-20 minutes)..."
 cd ~/devstack
+
+# Verify we're in the correct directory and stack.sh exists
+if [ ! -f "./stack.sh" ]; then
+    echo "ERROR: stack.sh not found in $(pwd). DevStack may not be properly cloned."
+    exit 1
+fi
+
+# Check if DevStack is already running
+if [ -f "/opt/stack/status/stack/nova-api.pid" ] || [ -f ".stack-status" ]; then
+    echo "DevStack appears to be already running. You may want to run './unstack.sh' first."
+    read -p "Continue anyway? (y/N): " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo "Exiting. Run './unstack.sh' to stop existing services, then re-run this script."
+        exit 0
+    fi
+fi
+
 ./stack.sh
 
 # 6. Post-Installation: OpenStack Initialization
