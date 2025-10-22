@@ -1,230 +1,377 @@
 #!/usr/bin/env bash
-# OpenStack DevStack Auto-Deployment Script for Ubuntu 22.04+
+# OpenStack DevStack Controller Node Auto-Deployment Script
+# Supports Ubuntu 20.04+
+# Usage: sudo bash deploy_controller.sh [--password PASSWORD] [--branch BRANCH]
 
-set -e  # exit on any error
-set -o pipefail
+set -euo pipefail
 
-# 1. Prerequisites and Environment Detection
-############################################
+# ============================================================================
+# Configuration and Argument Parsing
+# ============================================================================
 
-# Ensure the script is run as root (or with sudo)
-if [ "$(id -u)" -ne 0 ]; then 
-    echo "Please run this script as root or with sudo."
-    exit 1
-fi
-
-echo "Updating system packages and installing prerequisites..."
-apt-get update -y
-apt-get install -y git python3-pip  # git is needed to fetch DevStack
-
-# (Optional) Upgrade packages and reboot if needed
-if apt-get upgrade -y && [ -f /var/run/reboot-required ]; then
-    echo "System upgrade performed. A reboot is required. Please reboot and re-run the script."
-    exit 0
-fi
-
-# Gather network information (default interface, IP, etc.)
-# Find the primary network interface (with the default route)
-DEFAULT_IF=$(ip -o -4 route show to default | awk '{print $5}')
-if [[ -z "$DEFAULT_IF" ]]; then
-    echo "ERROR: Could not detect primary network interface."
-    exit 1
-fi
-HOST_IP=$(ip -4 -o addr show dev "$DEFAULT_IF" primary | awk '{print $4}' | cut -d/ -f1)
-HOST_NAME=$(hostname -s)
-GATEWAY_IP=$(ip -o -4 route show to default | awk '{print $3}')
-echo "Detected primary interface: $DEFAULT_IF with IP $HOST_IP (gateway $GATEWAY_IP)"
-
-# Check if a second interface (for external network) is available
-EXT_IF=""  # will hold an external interface name if found
-# Look for an interface that is UP, not lo or the primary, with no IP address
-for iface in $(ip -o link show | awk -F': ' '{print $2}' | grep -v "^$DEFAULT_IF$" | grep -v "^lo$"); do
-    # Check if interface is UP
-    if ! ip link show dev "$iface" | grep -q "state UP"; then
-        continue
-    fi
-    # Check if interface has no IPv4 address
-    if ip addr show dev "$iface" | grep -q "inet "; then
-        continue
-    fi
-    # If we get here, $iface has no IPv4 address and is UP
-    EXT_IF="$iface"
-    break
-done
-if [[ -n "$EXT_IF" ]]; then
-    echo "Detected secondary interface: $EXT_IF (will be used for external network)"
-else
-    echo "No suitable secondary interface found. Using default NAT mode."
-fi
-
-# 2. Create Stack User for DevStack
-###################################
-# DevStack should run as a regular user (not root) with sudo privileges:contentReference[oaicite:8]{index=8}:contentReference[oaicite:9]{index=9}.
+# Default values
+ADMIN_PASS="OpenStack123"
+DEVSTACK_BRANCH="master"
+LOG_FILE="/var/log/openstack-deploy.log"
 STACK_USER="stack"
-if ! id -u "$STACK_USER" >/dev/null 2>&1; then
-    echo "Creating user '$STACK_USER' for DevStack..."
-    useradd -m -s /bin/bash -d /opt/stack "$STACK_USER"
-    # Ensure the home directory has correct permissions (fix for Ubuntu 21.04+ umask issue):contentReference[oaicite:10]{index=10} 
-    chmod 755 /opt/stack
-fi
-# Give stack user passwordless sudo
-echo "$STACK_USER ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/99_stack_user
+STACK_HOME="/opt/stack"
 
-# 3. Define Default OpenStack Credentials
-#########################################
-# Using one strong password for all OpenStack services for simplicity:contentReference[oaicite:11]{index=11}.
-ADMIN_PASS="OpenStack123"   # Admin password (Horizon dashboard, etc.)
-DB_PASS="$ADMIN_PASS"       # Database (MySQL) root password
-RABBIT_PASS="$ADMIN_PASS"   # RabbitMQ messaging password
-SERVICE_PASS="$ADMIN_PASS"  # Common service user password
+# Parse command line arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --password)
+            ADMIN_PASS="$2"
+            shift 2
+            ;;
+        --branch)
+            DEVSTACK_BRANCH="$2"
+            shift 2
+            ;;
+        --help)
+            echo "Usage: $0 [--password PASSWORD] [--branch BRANCH]"
+            echo "  --password PASSWORD  Set admin password (default: OpenStack123)"
+            echo "  --branch BRANCH      DevStack branch (default: master)"
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1" >&2
+            exit 1
+            ;;
+    esac
+done
 
-# Note: Use only alphanumeric passwords to avoid issues:contentReference[oaicite:12]{index=12}.
-# (The default above is 12 characters, alphanumeric.)
+# ============================================================================
+# Logging and Error Handling
+# ============================================================================
 
-# 4. Configure DevStack's local.conf
-####################################
-echo "Preparing DevStack configuration (local.conf)..."
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"
+}
 
-# Switch to the stack user and run the remaining steps as that user
-sudo -i -u "$STACK_USER" bash <<EOF
-set -e
+error() {
+    log "ERROR: $*" >&2
+    exit 1
+}
 
-# Clone or update the DevStack repository (latest stable branch)
-DEVSTACK_DIR="/opt/stack/devstack"
-if [ ! -d "$DEVSTACK_DIR" ]; then
-    echo "Cloning DevStack repository..."
-    git clone https://opendev.org/openstack/devstack $DEVSTACK_DIR
-else
-    echo "DevStack repository already exists. Updating..."
-    cd $DEVSTACK_DIR
-    # Backup any existing local.conf
-    if [ -f "local.conf" ]; then
-        cp local.conf local.conf.backup.$(date +%Y%m%d_%H%M%S)
-        echo "Backed up existing local.conf"
+warning() {
+    log "WARNING: $*" >&2
+}
+
+# Cleanup function
+cleanup() {
+    local exit_code=$?
+    if [[ $exit_code -ne 0 ]]; then
+        log "Script failed with exit code $exit_code"
+        log "Check log file: $LOG_FILE"
     fi
-    # Clean any uncommitted changes and update
-    git stash push -u -m "Auto-stash before update $(date)" || true
-    git checkout master || git checkout main || true
-    git pull origin HEAD || true
-fi
-cd $DEVSTACK_DIR
+}
+trap cleanup EXIT
 
-# Create local.conf with the necessary configuration
+# ============================================================================
+# Prerequisites Check
+# ============================================================================
+
+check_prerequisites() {
+    log "Checking prerequisites..."
+    
+    # Check if running as root
+    if [[ $(id -u) -ne 0 ]]; then
+        error "This script must be run as root (use sudo)"
+    fi
+    
+    # Check Ubuntu version
+    if ! lsb_release -d 2>/dev/null | grep -q "Ubuntu"; then
+        warning "This script is designed for Ubuntu. Proceeding anyway..."
+    fi
+    
+    # Check minimum memory (8GB recommended)
+    local mem_gb=$(free -g | awk '/^Mem:/{print $2}')
+    if [[ $mem_gb -lt 4 ]]; then
+        warning "Less than 4GB RAM detected. OpenStack may not work properly."
+    fi
+    
+    # Check disk space (minimum 20GB)
+    local disk_gb=$(df / | awk 'NR==2{print int($4/1024/1024)}')
+    if [[ $disk_gb -lt 20 ]]; then
+        warning "Less than 20GB free disk space. Installation may fail."
+    fi
+    
+    log "Prerequisites check completed"
+}
+
+# ============================================================================
+# System Preparation
+# ============================================================================
+
+update_system() {
+    log "Updating system packages..."
+    
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -y || error "Failed to update package list"
+    
+    # Install essential packages
+    apt-get install -y \
+        git \
+        python3-pip \
+        python3-dev \
+        build-essential \
+        libssl-dev \
+        libffi-dev \
+        net-tools \
+        curl \
+        wget \
+        software-properties-common \
+        apt-transport-https \
+        ca-certificates \
+        lsb-release \
+        || error "Failed to install essential packages"
+    
+    log "System packages updated successfully"
+}
+
+# ============================================================================
+# Network Configuration Detection
+# ============================================================================
+
+detect_network() {
+    log "Detecting network configuration..."
+    
+    # Get primary interface and IP
+    DEFAULT_IF=$(ip -o -4 route show to default | awk '{print $5}' | head -n1)
+    if [[ -z "$DEFAULT_IF" ]]; then
+        error "Could not detect primary network interface"
+    fi
+    
+    HOST_IP=$(ip -4 addr show dev "$DEFAULT_IF" | awk '/inet /{print $2}' | cut -d/ -f1 | head -n1)
+    if [[ -z "$HOST_IP" ]]; then
+        error "Could not detect host IP address"
+    fi
+    
+    GATEWAY_IP=$(ip -o -4 route show to default | awk '{print $3}' | head -n1)
+    HOST_NAME=$(hostname -s)
+    
+    log "Network detected: Interface=$DEFAULT_IF, IP=$HOST_IP, Gateway=$GATEWAY_IP"
+}
+
+# ============================================================================
+# User Management
+# ============================================================================
+
+setup_stack_user() {
+    log "Setting up stack user..."
+    
+    # Create stack user if it doesn't exist
+    if ! id -u "$STACK_USER" >/dev/null 2>&1; then
+        useradd -m -s /bin/bash -d "$STACK_HOME" "$STACK_USER" || error "Failed to create stack user"
+        log "Created stack user"
+    else
+        log "Stack user already exists"
+    fi
+    
+    # Set proper permissions
+    chmod 755 "$STACK_HOME" || error "Failed to set stack home permissions"
+    
+    # Configure sudo access
+    echo "$STACK_USER ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/stack || error "Failed to configure sudo for stack user"
+    
+    log "Stack user setup completed"
+}
+
+# ============================================================================
+# DevStack Installation
+# ============================================================================
+
+install_devstack() {
+    log "Installing DevStack..."
+    
+    sudo -i -u "$STACK_USER" bash <<EOF
+set -euo pipefail
+
+log() {
+    echo "[\$(date '+%Y-%m-%d %H:%M:%S')] \$*"
+}
+
+# Clone or update DevStack
+DEVSTACK_DIR="\$HOME/devstack"
+if [[ ! -d "\$DEVSTACK_DIR" ]]; then
+    log "Cloning DevStack repository..."
+    git clone https://opendev.org/openstack/devstack "\$DEVSTACK_DIR" || exit 1
+else
+    log "DevStack already exists, updating..."
+    cd "\$DEVSTACK_DIR"
+    
+    # Backup existing local.conf
+    if [[ -f "local.conf" ]]; then
+        cp local.conf "local.conf.backup.\$(date +%Y%m%d_%H%M%S)"
+        log "Backed up existing local.conf"
+    fi
+    
+    # Clean and update
+    git stash || true
+    git checkout "$DEVSTACK_BRANCH" || git checkout master || true
+    git pull origin "$DEVSTACK_BRANCH" || git pull origin master || true
+fi
+
+cd "\$DEVSTACK_DIR"
+
+# Create local.conf
+log "Creating local.conf..."
 cat > local.conf <<LOCALCONF
 [[local|localrc]]
-# Credentials
+# Administrative passwords
 ADMIN_PASSWORD=$ADMIN_PASS
-DATABASE_PASSWORD=$DB_PASS
-RABBIT_PASSWORD=$RABBIT_PASS
-SERVICE_PASSWORD=$SERVICE_PASS
+DATABASE_PASSWORD=$ADMIN_PASS
+RABBIT_PASSWORD=$ADMIN_PASS
+SERVICE_PASSWORD=$ADMIN_PASS
 
-# Host network configuration
+# Network configuration
 HOST_IP=$HOST_IP
+SERVICE_HOST=$HOST_IP
+
+# Enable core services
+enable_service mysql
+enable_service rabbit
+enable_service key
+
+# Enable Nova services
+enable_service n-api
+enable_service n-cpu
+enable_service n-cond
+enable_service n-sch
+enable_service n-novnc
+enable_service placement-api
+enable_service placement-client
+
+# Enable Glance
+enable_service g-api
+enable_service g-reg
+
+# Enable Neutron
+enable_service q-svc
+enable_service q-agt
+enable_service q-dhcp
+enable_service q-l3
+enable_service q-meta
+
+# Enable Horizon
+enable_service horizon
+
+# Enable Cinder
+enable_service cinder
+enable_service c-api
+enable_service c-vol
+enable_service c-sch
+
+# Logging
+LOGFILE=\$DEST/logs/stack.sh.log
+VERBOSE=True
+LOG_COLOR=True
+SCREEN_LOGDIR=\$DEST/logs
+
+# Floating IP configuration
+FLOATING_RANGE=172.24.4.0/24
+PUBLIC_NETWORK_GATEWAY=172.24.4.1
+Q_FLOATING_ALLOCATION_POOL=start=172.24.4.225,end=172.24.4.254
+
+# Fixed IP configuration
+FIXED_RANGE=10.4.128.0/20
+NETWORK_GATEWAY=10.4.128.1
+
+# Swift (optional - disable for faster deployment)
+disable_service s-proxy s-object s-container s-account
+
+# Tempest (optional - disable for faster deployment)
+disable_service tempest
 LOCALCONF
 
-# If a secondary interface is available, configure it for external network
-if [[ -n "$EXT_IF" ]]; then
-    echo "PUBLIC_INTERFACE=$EXT_IF" >> local.conf
-    # Use the same network as HOST_IP for floating IPs (shared interface mode):contentReference[oaicite:13]{index=13}
-    FLOAT_NET_CIDR="$(ip -o -4 addr show dev $DEFAULT_IF | awk '{print $4}')"
-    FLOAT_NET=${FLOAT_NET_CIDR%/*}    # network address with prefix (e.g., 192.168.1.0/24)
-    FLOAT_PREFIX=${FLOAT_NET_CIDR#*/} # just the prefix number (e.g., 24)
-    # Determine Floating IP allocation pool on the external network:
-    # We'll allocate a small range at the high end of the subnet for Floating IPs.
-    python3 - <<PYCODE
-import ipaddress
-import sys
+log "Generated local.conf:"
+grep -v "PASSWORD" local.conf
 
-try:
-    net = ipaddress.ip_network(u"$FLOAT_NET_CIDR", strict=False)
-    # Choose last 10 usable addresses as floating pool (or fewer if subnet is small)
-    all_hosts = list(net.hosts())
-    if len(all_hosts) > 0:
-        start_ip = all_hosts[max(0, len(all_hosts)-10)]
-        end_ip = all_hosts[-1]
-        # Ensure start_ip is not the host IP or gateway
-        reserved = {"$HOST_IP", "$GATEWAY_IP"}
-        # If host or gateway are in the last addresses, adjust range to avoid them
-        res_start = ipaddress.ip_address(min(int(start_ip), int(end_ip)))
-        res_end = ipaddress.ip_address(max(int(start_ip), int(end_ip)))
-        # Remove any reserved from the top range
-        while str(res_end) in reserved and res_end >= net.network_address:
-            res_end = ipaddress.ip_address(int(res_end) - 1)
-        if res_end < net.network_address:
-            # If we somehow ran out of addresses, just use host IP as pool (edge case small subnet)
-            res_start = res_end = ipaddress.ip_address("$HOST_IP")
-        res_start_val = int(res_end) - 9 if int(res_end) - int(net.network_address) >= 9 else int(net.network_address) + 1
-        if res_start_val < int(net.network_address):
-            res_start_val = int(net.network_address) + 1
-        res_start = ipaddress.ip_address(res_start_val)
-        # Avoid reserved at start as well
-        while str(res_start) in reserved and res_start < res_end:
-            res_start = ipaddress.ip_address(int(res_start) + 1)
-        print(f"FLOATING_RANGE={net.network_address}/{net.prefixlen}")
-        print(f"PUBLIC_NETWORK_GATEWAY=$GATEWAY_IP")
-        print(f"Q_FLOATING_ALLOCATION_POOL=start={res_start},end={res_end}")
-    else:
-        print("# No usable host addresses in network")
-        print("FLOATING_RANGE=172.24.4.0/24")
-        print("PUBLIC_NETWORK_GATEWAY=172.24.4.1")
-        print("Q_FLOATING_ALLOCATION_POOL=start=172.24.4.225,end=172.24.4.254")
-except Exception as e:
-    print(f"# Error calculating floating range: {e}", file=sys.stderr)
-    print("FLOATING_RANGE=172.24.4.0/24")
-    print("PUBLIC_NETWORK_GATEWAY=172.24.4.1") 
-    print("Q_FLOATING_ALLOCATION_POOL=start=172.24.4.225,end=172.24.4.254")
-PYCODE
-    >> local.conf
-else
-    # No second interface: default DevStack NAT mode for external networking
-    # (Floating IP network will be 172.24.4.0/24 by default):contentReference[oaicite:14]{index=14}:contentReference[oaicite:15]{index=15}.
-    echo "# Using default NAT-based floating network (172.24.4.0/24)" >> local.conf
+# Check if DevStack is already running
+if [[ -f "\$HOME/.stack-status" ]] || pgrep -f "stack.sh" >/dev/null; then
+    log "DevStack appears to be running. Stopping existing services..."
+    ./unstack.sh || true
+    ./clean.sh || true
+    sleep 5
 fi
 
-# Enable useful services (Horizon dashboard is enabled by default in DevStack)
-# In case we want to ensure Horizon and Neutron are enabled:
-echo "enable_service horizon" >> local.conf
-echo "enable_service q-svc q-agt q-dhcp q-l3 q-meta" >> local.conf
-
-LOCALCONF
-
-# Display the generated local.conf for reference
-echo "Generated local.conf:"
-cat local.conf
-
-# 5. Run DevStack installation
-##############################
-echo "Running DevStack (this will take ~10-20 minutes)..."
-cd $DEVSTACK_DIR
-
-# Verify we're in the correct directory and stack.sh exists
-if [ ! -f "./stack.sh" ]; then
-    echo "ERROR: stack.sh not found in $(pwd). DevStack may not be properly cloned."
+# Run DevStack
+log "Starting DevStack installation (this will take 15-30 minutes)..."
+if ! ./stack.sh; then
+    log "DevStack installation failed. Check logs in \$HOME/devstack/logs/"
     exit 1
 fi
 
-# Check if DevStack is already running
-if [ -f "/opt/stack/status/stack/nova-api.pid" ] || [ -f ".stack-status" ]; then
-    echo "DevStack appears to be already running. You may want to run './unstack.sh' first."
-    read -p "Continue anyway? (y/N): " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        echo "Exiting. Run './unstack.sh' to stop existing services, then re-run this script."
-        exit 0
-    fi
-fi
-
-./stack.sh
-
-# 6. Post-Installation: OpenStack Initialization
-###############################################
-# Source the OpenStack credentials and open up default security group
-source $DEVSTACK_DIR/openrc admin admin  # load admin credentials
-# Allow ping (ICMP) and SSH (TCP/22) to instances by default:contentReference[oaicite:16]{index=16}:contentReference[oaicite:17]{index=17}
-openstack security group rule create --proto icmp --dst-port 0 default
-openstack security group rule create --proto tcp --dst-port 22 default
-
-echo "DevStack installation complete."
-echo "Horizon dashboard URL: http://$HOST_IP/ (user: admin, password: $ADMIN_PASS)" 
+# Mark installation as complete
+touch "\$HOME/.stack-status"
+log "DevStack installation completed successfully"
 EOF
+
+    if [[ $? -ne 0 ]]; then
+        error "DevStack installation failed"
+    fi
+    
+    log "DevStack installation completed"
+}
+
+# ============================================================================
+# Post-Installation Configuration
+# ============================================================================
+
+post_install_config() {
+    log "Running post-installation configuration..."
+    
+    sudo -i -u "$STACK_USER" bash <<EOF
+set -euo pipefail
+
+# Source OpenStack credentials
+source \$HOME/devstack/openrc admin admin
+
+# Wait for services to be ready
+echo "Waiting for OpenStack services to be ready..."
+sleep 30
+
+# Create default security group rules
+echo "Configuring default security group..."
+openstack security group rule create --proto icmp default || true
+openstack security group rule create --proto tcp --dst-port 22 default || true
+openstack security group rule create --proto tcp --dst-port 80 default || true
+openstack security group rule create --proto tcp --dst-port 443 default || true
+
+echo "Security group rules created"
+EOF
+
+    log "Post-installation configuration completed"
+}
+
+# ============================================================================
+# Main Installation Process
+# ============================================================================
+
+main() {
+    log "Starting OpenStack DevStack Controller deployment"
+    log "Configuration: Password=$ADMIN_PASS, Branch=$DEVSTACK_BRANCH"
+    
+    check_prerequisites
+    update_system
+    detect_network
+    setup_stack_user
+    install_devstack
+    post_install_config
+    
+    log "====================================================="
+    log "OpenStack DevStack Controller deployment completed!"
+    log "====================================================="
+    log "Dashboard URL: http://$HOST_IP/"
+    log "Username: admin"
+    log "Password: $ADMIN_PASS"
+    log "Log file: $LOG_FILE"
+    log "====================================================="
+    
+    # Display service status
+    sudo -i -u "$STACK_USER" bash -c "source ~/devstack/openrc admin admin && openstack service list" || true
+}
+
+# Run main function
+main "$@"
 
