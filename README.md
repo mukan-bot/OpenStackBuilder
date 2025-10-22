@@ -2,6 +2,20 @@
 
 このリポジトリには、OpenStack DevStackを自動デプロイするためのスクリプトが含まれています。
 
+## 最新の修正事項（2025年10月23日）
+
+### 🔧 重要な修正
+- **MySQL設定問題の解決**: Ubuntu 24.04での`/etc/mysql/my.cnf`不在問題を修正
+- **OVN vs OVS競合の完全解決**: 複数のOVN無効化フラグで確実にOVSを使用
+- **完全クリーンアップツール**: `force_cleanup.sh`で問題発生時の完全リセット
+
+### 🚨 緊急時の使用方法
+問題が発生した場合は、以下の手順で完全にクリーンアップしてから再実行：
+```bash
+sudo ./force_cleanup.sh
+sudo ./deploy_controller.sh --password OpenStack123
+```
+
 ## 概要
 
 - `deploy_controller.sh`: コントローラーノードをデプロイ
