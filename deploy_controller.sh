@@ -86,8 +86,11 @@ check_prerequisites() {
     
     # Check minimum memory (8GB recommended)
     local mem_gb=$(free -g | awk '/^Mem:/{print $2}')
-    if [[ $mem_gb -lt 4 ]]; then
-        warning "Less than 4GB RAM detected. OpenStack may not work properly."
+    if [[ $mem_gb -lt 2 ]]; then
+        warning "Less than 2GB RAM detected ($mem_gb GB). OpenStack may not work properly."
+        warning "Consider adding more memory or using a smaller configuration."
+    elif [[ $mem_gb -lt 4 ]]; then
+        warning "Less than 4GB RAM detected ($mem_gb GB). Performance may be limited."
     fi
     
     # Check disk space (minimum 20GB)
@@ -228,6 +231,11 @@ SERVICE_PASSWORD=$ADMIN_PASS
 HOST_IP=$HOST_IP
 SERVICE_HOST=$HOST_IP
 
+# DevStack directories
+DEST=/opt/stack
+DATA_DIR=\$DEST/data
+SERVICE_DIR=\$DEST/status
+
 # Enable core services
 enable_service mysql
 enable_service rabbit
@@ -350,7 +358,8 @@ EOF
 
 main() {
     log "Starting OpenStack DevStack Controller deployment"
-    log "Configuration: Password=$ADMIN_PASS, Branch=$DEVSTACK_BRANCH"
+    log "Configuration: Password=${ADMIN_PASS}, Branch=${DEVSTACK_BRANCH}"
+    log "Command line arguments: $*"
     
     check_prerequisites
     update_system
