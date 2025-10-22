@@ -90,24 +90,24 @@ sudo -i -u "$STACK_USER" bash <<EOF
 set -e
 
 # Clone or update the DevStack repository (latest stable branch)
-if [ ! -d "~/devstack" ]; then
+DEVSTACK_DIR="/opt/stack/devstack"
+if [ ! -d "\$DEVSTACK_DIR" ]; then
     echo "Cloning DevStack repository..."
-    git clone https://opendev.org/openstack/devstack ~/devstack
+    git clone https://opendev.org/openstack/devstack \$DEVSTACK_DIR
 else
     echo "DevStack repository already exists. Updating..."
-    cd ~/devstack
+    cd \$DEVSTACK_DIR
     # Backup any existing local.conf
     if [ -f "local.conf" ]; then
-        cp local.conf local.conf.backup.$(date +%Y%m%d_%H%M%S)
+        cp local.conf local.conf.backup.\$(date +%Y%m%d_%H%M%S)
         echo "Backed up existing local.conf"
     fi
     # Clean any uncommitted changes and update
-    git stash push -u -m "Auto-stash before update $(date)"
+    git stash push -u -m "Auto-stash before update \$(date)" || true
     git checkout master || git checkout main || true
-    git pull origin HEAD
-    cd ~/
+    git pull origin HEAD || true
 fi
-cd ~/devstack
+cd \$DEVSTACK_DIR
 
 # Create local.conf with the necessary configuration
 cat > local.conf <<LOCALCONF
@@ -195,11 +195,11 @@ cat local.conf
 # 5. Run DevStack installation
 ##############################
 echo "Running DevStack (this will take ~10-20 minutes)..."
-cd ~/devstack
+cd \$DEVSTACK_DIR
 
 # Verify we're in the correct directory and stack.sh exists
 if [ ! -f "./stack.sh" ]; then
-    echo "ERROR: stack.sh not found in $(pwd). DevStack may not be properly cloned."
+    echo "ERROR: stack.sh not found in \$(pwd). DevStack may not be properly cloned."
     exit 1
 fi
 
@@ -208,7 +208,7 @@ if [ -f "/opt/stack/status/stack/nova-api.pid" ] || [ -f ".stack-status" ]; then
     echo "DevStack appears to be already running. You may want to run './unstack.sh' first."
     read -p "Continue anyway? (y/N): " -n 1 -r
     echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+    if [[ ! \$REPLY =~ ^[Yy]\$ ]]; then
         echo "Exiting. Run './unstack.sh' to stop existing services, then re-run this script."
         exit 0
     fi
@@ -219,12 +219,12 @@ fi
 # 6. Post-Installation: OpenStack Initialization
 ###############################################
 # Source the OpenStack credentials and open up default security group
-source ~/devstack/openrc admin admin  # load admin credentials
+source \$DEVSTACK_DIR/openrc admin admin  # load admin credentials
 # Allow ping (ICMP) and SSH (TCP/22) to instances by default:contentReference[oaicite:16]{index=16}:contentReference[oaicite:17]{index=17}
 openstack security group rule create --proto icmp --dst-port 0 default
 openstack security group rule create --proto tcp --dst-port 22 default
 
 echo "DevStack installation complete."
-echo "Horizon dashboard URL: http://$HOST_IP/ (user: admin, password: $ADMIN_PASS)" 
+echo "Horizon dashboard URL: http://\$HOST_IP/ (user: admin, password: \$ADMIN_PASS)" 
 EOF
 
