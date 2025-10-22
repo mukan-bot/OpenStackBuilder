@@ -236,6 +236,13 @@ DEST=/opt/stack
 DATA_DIR=\$DEST/data
 SERVICE_DIR=\$DEST/status
 
+# Force OVS instead of OVN
+Q_AGENT=openvswitch
+Q_ML2_TENANT_NETWORK_TYPE=vxlan
+NEUTRON_AGENT=openvswitch
+USE_OVN=False
+OVN_BUILD_FROM_SOURCE=False
+
 # Enable core services
 enable_service mysql
 enable_service rabbit
@@ -254,21 +261,12 @@ enable_service placement-client
 enable_service g-api
 enable_service g-reg
 
-# Enable Neutron with OVS (not OVN)
+# Enable Neutron with OVS (not OVN) - MUST come before any disable statements
 enable_service q-svc
 enable_service q-agt
 enable_service q-dhcp
 enable_service q-l3
 enable_service q-meta
-
-# Explicitly disable OVN services
-disable_service ovn-controller
-disable_service ovn-northd
-disable_service q-ovn-metadata-agent
-
-# Use OVS instead of OVN
-Q_AGENT=openvswitch
-Q_ML2_TENANT_NETWORK_TYPE=vxlan
 
 # Enable Horizon
 enable_service horizon
@@ -278,6 +276,13 @@ enable_service cinder
 enable_service c-api
 enable_service c-vol
 enable_service c-sch
+
+# Explicitly disable ALL OVN services
+disable_service ovn-controller
+disable_service ovn-northd
+disable_service ovs-vswitchd
+disable_service ovsdb-server
+disable_service q-ovn-metadata-agent
 
 # Logging
 LOGFILE=\$DEST/logs/stack.sh.log
@@ -300,8 +305,10 @@ Q_ML2_PLUGIN_MECHANISM_DRIVERS=openvswitch
 Q_ML2_PLUGIN_TYPE_DRIVERS=vxlan,flat,vlan
 ENABLE_TENANT_VLANS=True
 
-# Disable OVN completely
+# Completely disable OVN
 USE_OVN=False
+Q_USE_OVN=False
+NEUTRON_USE_OVN=False
 
 # Swift (optional - disable for faster deployment)
 disable_service s-proxy s-object s-container s-account
@@ -324,6 +331,14 @@ if [[ -f "\$HOME/.stack-status" ]] || pgrep -f "stack.sh" >/dev/null; then
     ./clean.sh || true
     sleep 5
 fi
+
+# Clean any existing OVN configuration
+log "Cleaning any existing OVN configuration..."
+sudo systemctl stop ovn-controller || true
+sudo systemctl stop ovn-northd || true
+sudo systemctl disable ovn-controller || true
+sudo systemctl disable ovn-northd || true
+sudo apt-get remove -y ovn-central ovn-common ovn-host || true
 
 # Run DevStack
 log "Starting DevStack installation (this will take 15-30 minutes)..."
