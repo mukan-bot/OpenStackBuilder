@@ -20,17 +20,25 @@
 
 ## 使用方法
 
+### 0. 初期セットアップ
+
+```bash
+# スクリプトの実行権限を設定
+chmod +x setup.sh
+./setup.sh
+```
+
 ### 1. コントローラーノードのデプロイ
 
 ```bash
 # 基本的な使用方法
-sudo bash deploy_controller.sh
+sudo ./deploy_controller.sh
 
 # パスワードを指定
-sudo bash deploy_controller.sh --password MySecurePassword123
+sudo ./deploy_controller.sh --password MySecurePassword123
 
 # 特定のDevStackブランチを指定
-sudo bash deploy_controller.sh --branch stable/2024.1
+sudo ./deploy_controller.sh --branch stable/2024.1
 ```
 
 #### オプション
@@ -42,10 +50,10 @@ sudo bash deploy_controller.sh --branch stable/2024.1
 
 ```bash
 # 基本的な使用方法（コントローラーIPは必須）
-sudo bash deploy_compute.sh --controller 192.168.1.100
+sudo ./deploy_compute.sh --controller 192.168.1.100
 
 # 全オプション指定
-sudo bash deploy_compute.sh \
+sudo ./deploy_compute.sh \
   --controller 192.168.1.100 \
   --password MySecurePassword123 \
   --branch stable/2024.1 \
@@ -63,12 +71,12 @@ sudo bash deploy_compute.sh \
 
 1. **コントローラーノードをデプロイ**:
    ```bash
-   sudo bash deploy_controller.sh --password OpenStack123
+   sudo ./deploy_controller.sh --password OpenStack123
    ```
 
 2. **コンピュートノードをデプロイ**:
    ```bash
-   sudo bash deploy_compute.sh --controller <CONTROLLER_IP> --password OpenStack123
+   sudo ./deploy_compute.sh --controller <CONTROLLER_IP> --password OpenStack123
    ```
 
 3. **コントローラーでコンピュートノードを発見**:
