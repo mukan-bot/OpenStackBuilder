@@ -91,23 +91,23 @@ set -e
 
 # Clone or update the DevStack repository (latest stable branch)
 DEVSTACK_DIR="/opt/stack/devstack"
-if [ ! -d "\$DEVSTACK_DIR" ]; then
+if [ ! -d "$DEVSTACK_DIR" ]; then
     echo "Cloning DevStack repository..."
-    git clone https://opendev.org/openstack/devstack \$DEVSTACK_DIR
+    git clone https://opendev.org/openstack/devstack $DEVSTACK_DIR
 else
     echo "DevStack repository already exists. Updating..."
-    cd \$DEVSTACK_DIR
+    cd $DEVSTACK_DIR
     # Backup any existing local.conf
     if [ -f "local.conf" ]; then
-        cp local.conf local.conf.backup.\$(date +%Y%m%d_%H%M%S)
+        cp local.conf local.conf.backup.$(date +%Y%m%d_%H%M%S)
         echo "Backed up existing local.conf"
     fi
     # Clean any uncommitted changes and update
-    git stash push -u -m "Auto-stash before update \$(date)" || true
+    git stash push -u -m "Auto-stash before update $(date)" || true
     git checkout master || git checkout main || true
     git pull origin HEAD || true
 fi
-cd \$DEVSTACK_DIR
+cd $DEVSTACK_DIR
 
 # Create local.conf with the necessary configuration
 cat > local.conf <<LOCALCONF
@@ -120,15 +120,15 @@ SERVICE_PASSWORD=$SERVICE_PASS
 
 # Host network configuration
 HOST_IP=$HOST_IP
-EOF
+LOCALCONF
 
 # If a secondary interface is available, configure it for external network
 if [[ -n "$EXT_IF" ]]; then
     echo "PUBLIC_INTERFACE=$EXT_IF" >> local.conf
     # Use the same network as HOST_IP for floating IPs (shared interface mode):contentReference[oaicite:13]{index=13}
-    FLOAT_NET_CIDR="$(ip -o -4 addr show dev $DEFAULT_IF | awk '{print \$4}')"
-    FLOAT_NET=\${FLOAT_NET_CIDR%/*}    # network address with prefix (e.g., 192.168.1.0/24)
-    FLOAT_PREFIX=\${FLOAT_NET_CIDR#*/} # just the prefix number (e.g., 24)
+    FLOAT_NET_CIDR="$(ip -o -4 addr show dev $DEFAULT_IF | awk '{print $4}')"
+    FLOAT_NET=${FLOAT_NET_CIDR%/*}    # network address with prefix (e.g., 192.168.1.0/24)
+    FLOAT_PREFIX=${FLOAT_NET_CIDR#*/} # just the prefix number (e.g., 24)
     # Determine Floating IP allocation pool on the external network:
     # We'll allocate a small range at the high end of the subnet for Floating IPs.
     python3 - <<PYCODE
@@ -195,11 +195,11 @@ cat local.conf
 # 5. Run DevStack installation
 ##############################
 echo "Running DevStack (this will take ~10-20 minutes)..."
-cd \$DEVSTACK_DIR
+cd $DEVSTACK_DIR
 
 # Verify we're in the correct directory and stack.sh exists
 if [ ! -f "./stack.sh" ]; then
-    echo "ERROR: stack.sh not found in \$(pwd). DevStack may not be properly cloned."
+    echo "ERROR: stack.sh not found in $(pwd). DevStack may not be properly cloned."
     exit 1
 fi
 
@@ -208,7 +208,7 @@ if [ -f "/opt/stack/status/stack/nova-api.pid" ] || [ -f ".stack-status" ]; then
     echo "DevStack appears to be already running. You may want to run './unstack.sh' first."
     read -p "Continue anyway? (y/N): " -n 1 -r
     echo
-    if [[ ! \$REPLY =~ ^[Yy]\$ ]]; then
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
         echo "Exiting. Run './unstack.sh' to stop existing services, then re-run this script."
         exit 0
     fi
@@ -219,12 +219,12 @@ fi
 # 6. Post-Installation: OpenStack Initialization
 ###############################################
 # Source the OpenStack credentials and open up default security group
-source \$DEVSTACK_DIR/openrc admin admin  # load admin credentials
+source $DEVSTACK_DIR/openrc admin admin  # load admin credentials
 # Allow ping (ICMP) and SSH (TCP/22) to instances by default:contentReference[oaicite:16]{index=16}:contentReference[oaicite:17]{index=17}
 openstack security group rule create --proto icmp --dst-port 0 default
 openstack security group rule create --proto tcp --dst-port 22 default
 
 echo "DevStack installation complete."
-echo "Horizon dashboard URL: http://\$HOST_IP/ (user: admin, password: \$ADMIN_PASS)" 
+echo "Horizon dashboard URL: http://$HOST_IP/ (user: admin, password: $ADMIN_PASS)" 
 EOF
 
