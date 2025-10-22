@@ -333,7 +333,15 @@ disable_service c-vol
 disable_service c-sch
 
 # Networking
-Q_AGENT=ovs
+Q_AGENT=openvswitch
+
+# Explicitly disable OVN services
+disable_service ovn-controller
+disable_service ovn-northd
+disable_service q-ovn-metadata-agent
+
+# Use OVS instead of OVN
+USE_OVN=False
 
 # Logging
 LOGFILE=\$DEST/logs/stack.sh.log

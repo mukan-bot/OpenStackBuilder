@@ -254,12 +254,21 @@ enable_service placement-client
 enable_service g-api
 enable_service g-reg
 
-# Enable Neutron
+# Enable Neutron with OVS (not OVN)
 enable_service q-svc
 enable_service q-agt
 enable_service q-dhcp
 enable_service q-l3
 enable_service q-meta
+
+# Explicitly disable OVN services
+disable_service ovn-controller
+disable_service ovn-northd
+disable_service q-ovn-metadata-agent
+
+# Use OVS instead of OVN
+Q_AGENT=openvswitch
+Q_ML2_TENANT_NETWORK_TYPE=vxlan
 
 # Enable Horizon
 enable_service horizon
@@ -284,6 +293,15 @@ Q_FLOATING_ALLOCATION_POOL=start=172.24.4.225,end=172.24.4.254
 # Fixed IP configuration
 FIXED_RANGE=10.4.128.0/20
 NETWORK_GATEWAY=10.4.128.1
+
+# Neutron ML2 configuration
+Q_PLUGIN=ml2
+Q_ML2_PLUGIN_MECHANISM_DRIVERS=openvswitch
+Q_ML2_PLUGIN_TYPE_DRIVERS=vxlan,flat,vlan
+ENABLE_TENANT_VLANS=True
+
+# Disable OVN completely
+USE_OVN=False
 
 # Swift (optional - disable for faster deployment)
 disable_service s-proxy s-object s-container s-account
