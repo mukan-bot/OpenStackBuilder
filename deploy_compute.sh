@@ -348,8 +348,6 @@ LOGFILE=\$DEST/logs/stack.sh.log
 VERBOSE=True
 LOG_COLOR=True
 SCREEN_LOGDIR=\$DEST/logs
-
-# Optional: Configure public interface if specified
 LOCALCONF
 
 # Replace placeholders with actual values
@@ -357,9 +355,6 @@ sed -i "s/ADMIN_PASS_PLACEHOLDER/$ADMIN_PASS/g" local.conf
 sed -i "s/HOST_IP_PLACEHOLDER/$HOST_IP/g" local.conf
 sed -i "s/CONTROLLER_IP_PLACEHOLDER/$CONTROLLER_IP/g" local.conf
 sed -i "s/LIBVIRT_TYPE_PLACEHOLDER/$LIBVIRT_TYPE/g" local.conf
-
-# Optional: Configure public interface if specified
-LOCALCONF
 
 if [[ -n "$PUBLIC_IF" ]]; then
     echo "PUBLIC_INTERFACE=$PUBLIC_IF" >> local.conf
