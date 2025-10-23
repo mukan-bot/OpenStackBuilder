@@ -401,11 +401,14 @@ EOF
 post_install_config() {
     log "Running post-installation configuration..."
     
-    sudo -i -u "$STACK_USER" bash <<EOF
+    sudo -i -u "$STACK_USER" bash <<'EOF'
 set -euo pipefail
 
+# Set DevStack functions variable to avoid unbound variable error
+export _DEVSTACK_FUNCTIONS=1
+
 # Source OpenStack credentials
-source \$HOME/devstack/openrc admin admin
+source $HOME/devstack/openrc admin admin
 
 # Wait for services to be ready
 echo "Waiting for OpenStack services to be ready..."
